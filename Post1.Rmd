@@ -1,10 +1,142 @@
 ---
-title: "Post 1"
-output: rmarkdown::github_document
+title: "Post 1: Analyzing Co-Occurance Networks of Les Misérables Characters"
+output:
+  github_document:
+    html_preview: true
 ---
+
+# Objective
+In this post, I will go through a graph problem called "Community Detection". Community detection is a very important problem in the area of graph theory and social networking.
+
+# Data
+For ease of understanding I will use a relatively smalle
+
+
+```{r message=FALSE, warning=TRUE}
+library(tidyverse)
+library(igraph)
+library(statnet)
+library(tidygraph)
+library(ggraph)
+
+library(igraph)
+library(dplyr)
+library(ggplot2)
+library(plyr)
+```
+
 
 
 ```{r}
-plot(cars)
+original_vertices <- read.csv("data/les_mis_vertices.csv", stringsAsFactors = FALSE)
+original_edgelist <- read.csv("data/les_mis_edges.csv", stringsAsFactors = FALSE)
+
+names <- unique(c(original_edgelist$from, original_edgelist$to))
+
+g <- graph_from_data_frame(d=original_edgelist, vertices = original_vertices, directed=TRUE)
+
+V(g)$Degree <- centralization.degree(g)$res
+V(g)$Betweenness <- centralization.betweenness(g)$res
+V(g)$Community <- paste0("C",V(g)$Community)
+V(g)$Group <- V(g)$Community
+
+V(g)$r <- log(V(g)$Degree)/12 #Radius of node Just for visualization purpose
 ```
 
+
+
+
+```{r fig.width=8, fig.height=8, echo=FALSE}
+plot_graph <- function(g, color_by="Community"){
+  gGraph <- as_tbl_graph(g)
+  V(gGraph)$Group <- factor(get.data.frame(g, what = "vertices")[,color_by])
+  
+  set.seed(12)
+  
+  p <-ggraph(gGraph, layout = "fr", maxiter = 1000) + 
+  geom_node_circle(aes(colour = Group, fill = Group), show.legend = F) +
+  geom_edge_link(aes(width = weight), alpha = 0.2, show.legend = F) + 
+  scale_edge_width(range = c(0.2, 2)) +
+  geom_node_text(aes(label = name), repel = TRUE, show.legend = F, size=3) +
+  theme_graph()
+  return(p)
+}
+
+plot_graph(g, "Community")
+plot_graph(g, "Degree")
+```
+
+
+```{r}
+
+```
+
+```{r}
+node_list <- get.data.frame(g, what = "vertices")
+
+all_nodes <- sort(node_list$name)
+
+edge_list <- get.data.frame(g, what = "edges") %>%
+  inner_join(node_list %>% select(name, Community), by = c("from" = "name")) %>%
+  inner_join(node_list %>% select(name, Community), by = c("to" = "name")) %>%
+  mutate(group = ifelse(Community.x == Community.y, Community.x, NA) %>% factor())
+
+plot_data <- edge_list %>% mutate(to = factor(to, levels = all_nodes), from = factor(from, levels = all_nodes))
+```
+
+
+```{r fig.width=4, fig.height=4, echo=FALSE}
+matrix_plot <- function(plot_data, arr_var="name"){
+  name_order <- (node_list %>% arrange_(arr_var))$name
+  plot_data <- plot_data %>% mutate(to = factor(to, levels = name_order), from = factor(from, levels = name_order))
+
+  p <- ggplot(plot_data, aes(x = from, y = to, fill = group))
+    p <- p + geom_raster() +
+      theme_bw() + scale_x_discrete(drop = FALSE) + scale_y_discrete(drop = FALSE) +
+      theme(axis.text.x = element_text(angle = 270, hjust = 0, size = 8),
+            axis.text.y = element_text(size = 8),
+            aspect.ratio = 1, legend.position = "none")
+    return(p)
+}
+
+matrix_plot(plot_data, "name")
+matrix_plot(plot_data, "Community")
+matrix_plot(plot_data, "Degree")
+matrix_plot(plot_data, "Betweenness")
+```
+
+
+```{r fig.width=8, fig.height=8, echo=FALSE}
+g <- as.undirected(g)
+V(g)$fastgreedy_comm <- membership(fastgreedy.community(g))
+V(g)$multilevel_comm <- membership(multilevel.community(g, weights = E(g)$weight))
+V(g)$walktrap_comm <- membership(walktrap.community(g))
+V(g)$edge_comm <- membership(edge.betweenness.community(g))
+V(g)$spinglass_comm <- membership(spinglass.community(g))
+V(g)$infomap_comm <- membership(infomap.community(g))
+```
+
+
+```{r fig.width=8, fig.height=8, echo=FALSE}
+plot_graph(g, "fastgreedy_comm")
+```
+
+```{r fig.width=8, fig.height=8, echo=FALSE}
+plot_graph(g, "multilevel_comm")
+```
+
+```{r fig.width=8, fig.height=8, echo=FALSE}
+plot_graph(g, "walktrap_comm")
+```
+
+```{r fig.width=8, fig.height=8, echo=FALSE}
+plot_graph(g, "edge_comm")
+```
+
+```{r fig.width=8, fig.height=8, echo=FALSE}
+plot_graph(g, "spinglass_comm")
+```
+
+```{r fig.width=8, fig.height=8}
+plot_graph(g, "infomap_comm")
+```
