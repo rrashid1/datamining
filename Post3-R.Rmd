@@ -1,0 +1,244 @@
+---
+title: "Post 3 (R Version): Semi-Supervised Learning for Credit Card Anomaly Detection (Not for Grading)"
+output: rmarkdown::github_document
+---
+
+#Dataset
+My focus for this post is to explore the semi-supervised learning technique for detecting anomaly in real data. I am using the following dataset from Kaggle. https://www.kaggle.com/mlg-ulb/creditcardfraud
+
+
+```{r message=FALSE, warning=FALSE}
+require(data.table)
+require(ggplot2)
+library(caret)
+library(parallel)
+library(foreach)
+library(doParallel)
+```
+
+#For the test case take random 10000 Data
+```{r message=FALSE, warning=TRUE}
+dataset <- fread("data/creditcard.csv")
+
+set.seed(138)
+dataset <- dataset[sample(1:nrow(dataset),0.2*nrow(dataset)),]
+
+
+dataset$Fradulant <- factor(dataset$Class)
+table(dataset$Fradulant)
+```
+
+
+284807
+```{r}
+dataset$LogAmount = log(dataset$Amount + 1) 
+dataset$LogTime = log(dataset$Time + 1)
+normal = dataset[dataset$Class == 0,]
+anomaly = dataset[dataset$Class == 1,]
+dim(normal)
+dim(anomaly)
+```
+
+```{r}
+train.I <- sample(1:nrow(normal), 0.8*nrow(normal))
+train <- normal[train.I,] #80% of Normal Data
+normal_test <- normal[-train.I,]
+
+valid.I <- sample(1:nrow(normal_test), 0.5*nrow(normal_test))
+normal_valid <- normal_test[valid.I,] #50% of remaining data as Validation Set
+normal_test <- normal_test[-valid.I,] #50% of remaining data as Test Set
+
+train.I <- sample(1:nrow(anomaly), 0.5*nrow(anomaly))
+anormal_valid <- anomaly[train.I,]
+anormal_test <- anomaly[-train.I,]
+
+valid = rbind(normal_valid, anormal_valid)
+valid = valid[sample(nrow(valid)),] #Random Shuffle
+
+test = rbind(normal_test, anormal_test)
+test = test[sample(nrow(test)),] #Random Shuffle
+
+print(paste(nrow(normal), nrow(train),nrow(normal_test),nrow(normal_valid),nrow(train)+nrow(normal_test)+nrow(normal_valid)))
+
+print(paste(dim(train),dim(test),dim(valid),nrow(train)+nrow(test)+nrow(valid)))
+
+options(digits=2)
+paste('Proportion os anomaly in training set: ', mean(train$Class))
+paste('Proportion os anomaly in validation set: ', mean(valid$Class))
+paste('Proportion os anomaly in test set: ', mean(test$Class))
+```
+
+```{r}
+plotDensity <- function(df, Variable) {
+  ggplot(dataset, aes_string(x=Variable, color="Fradulant", fill="Fradulant")) + geom_density(alpha=0.5) +
+  scale_color_brewer(palette="Accent") + scale_fill_brewer(palette="Accent") + theme_minimal()
+}
+
+vars <- c("LogAmount", 'V4', 'V10', 'V11', "V12", 'V15')
+for(i in 1:length(vars)){print(plotDensity(dataset, vars[i]))}
+```
+
+```{r}
+
+```
+
+
+```{r warning=FALSE}
+NBreaks <- 50
+vars <- c("LogAmount", "LogTime", paste0("V",1:28))
+
+
+bin_edge <- matrix(nrow = length(vars), ncol = NBreaks+1)
+bin_height <- matrix(nrow = length(vars), ncol = NBreaks)
+
+fit.hist_model <- function(df, X){
+  for(i in 1:length(X)){
+
+        data <- df[df$Class==0, get(X[i])]
+    br <- seq(min(data), max(data),by=(max(data)-min(data))/NBreaks)
+    h <- hist(data, breaks = br, include.lowest=TRUE,  plot=FALSE)
+
+    bin_edge[i,] <<- h$breaks
+    bin_height[i,] <<- h$counts
+  }
+}
+
+predict.hist_model <- function(df, X){
+  scores <- rep(0, nrow(df))
+  
+  for(i in 1:length(X)){
+    colData <- df[, get(X[i])]
+
+    for(j in 1:nrow(df)){
+      val <- as.numeric(colData[j])
+      bin_num = max(1, which.max(val < bin_edge[i,]) - 1)
+      scores[j] <- scores[j]+bin_height[i, bin_num]
+    }
+  }
+  
+  scores <- scores/length(X)
+
+  return (scores)
+}
+  
+#temp <- quote(list(LogAmount, V4, V10, V11, V12, V15))
+fit.hist_model(train, vars)
+
+V0 <- predict.hist_model(valid[valid$Class==0,], vars)
+V1 <- predict.hist_model(valid[valid$Class==1,], vars)
+median(V0)
+median(V1)
+```
+
+
+```{r}
+tresholds = seq(2000, 15000, 100)
+y_pred_score = predict.hist_model(valid, vars)
+
+recalls <- c()
+precisions <- c()
+f2 <- c()
+i <- 1
+treshold <- 37000
+for (treshold in tresholds){
+    y_hat = ifelse(y_pred_score < treshold,1,0)
+
+    precision <- posPredValue(factor(y_hat), factor(valid$Class), positive="1")
+    recall <- sensitivity(factor(y_hat), factor(valid$Class), positive="1")
+    
+    precisions[i] <- precision
+    recalls[i] <- recall
+    f2[i] <- 5*(precision*recall)/(4*precision+recall)
+    
+    i <- i + 1
+}
+
+plot(tresholds, recalls)
+plot(tresholds, precisions)
+plot(tresholds, f2)
+```
+
+
+#
+```{r}
+library(mclust)
+BIC <- mclustBIC(train[,c(2:29, 33, 34)])
+```
+
+```{r}
+plot(BIC)
+summary(BIC)
+```
+
+```{r}
+mod <- Mclust(train[,c(2:29, 33, 34)], x = BIC)
+summary(mod)
+```
+
+```{r}
+mod2 <- MclustDA(train[,c(2:29, 33, 34)], class, modelType = "EDDA")
+summary(mod2)
+```
+
+```{r}
+library(sGMRFmix)
+fit <- sGMRFmix(train[,c(2:29, 33, 34)], K = 7, rho = 0.8, verbose = FALSE)
+```
+
+```{r}
+anomaly_score <- compute_anomaly_score(fit, valid[,c(2:29, 33, 34)])
+plot_multivariate_data(anomaly_score, fix_scale = TRUE)
+```
+
+```{r}
+n_split <- 5
+split_block <- sample(n_split, size = nrow(valid[,c(2:29, 33, 34)]), replace = TRUE)
+split_test_data <- split(valid[,c(2:29, 33, 34)], split_block)
+split_test_labels <- split(valid$Class, split_block)
+
+rho_candidates <- 10^seq(-1, 1, length.out = 10)
+
+library(ModelMetrics)
+library(sGMRFmix)
+
+df <- data.frame()
+foreach (rho_i = 1:10, .combine = list) %dopar%  
+{
+  library(sGMRFmix)
+  rho <- rho_candidates[rho_i]
+  fit <- sGMRFmix(train[,c(2:29, 33, 34)], K = 7, rho = rho, verbose = FALSE)
+  auc <- double(n_split)
+  for (i in seq_len(n_split)) {
+    anomaly_score <- compute_anomaly_score(fit, split_test_data[[i]])
+    auc[i] <- auc(unlist(split_test_labels[[i]]), unlist(anomaly_score))
+  }
+  df <- rbind(df, data.frame(rho = rho, auc = auc))
+}
+```
+
+```{r}
+library(dplyr)
+df %>% group_by(rho) %>% summarise(mean_auc = mean(auc)) %>% 
+  mutate(max = ifelse(max(mean_auc) == mean_auc, "***", "."))
+```
+
+```{r}
+optimal_rho <- 0.774
+fit <- sGMRFmix(train[,c(2:29, 33, 34)], K = 7, rho = optimal_rho, verbose = FALSE)
+
+threshold_candidates <- 10^seq(-1, 1, length.out = 100)
+df <- data.frame()
+for (i in seq_len(n_split)) {
+  anomaly_score <- compute_anomaly_score(fit, split_test_data[[i]])
+  f_measure <- double(length(threshold_candidates))
+  for (j in seq_along(threshold_candidates)) {
+    f1 <- f1Score(unlist(split_test_labels[[i]]), unlist(anomaly_score), 
+                  cutoff = threshold_candidates[j])
+    f_measure[j] <- f1
+  }
+  df <- rbind(df, data.frame(cutoff = threshold_candidates, f_measure = f_measure))
+}
+```
+
+#Reference
+https://cran.r-project.org/web/packages/sGMRFmix/vignettes/sGMRFmix.html
